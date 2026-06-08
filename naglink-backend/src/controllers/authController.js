@@ -7,6 +7,11 @@ const db = require("../models");
 const User = db.User;
 const { Op } = require("sequelize");
 
+/**
+ * =========================
+ * TOKEN GENERATOR
+ * =========================
+ */
 const generateToken = (user) => {
   return jwt.sign(
     {
@@ -19,19 +24,41 @@ const generateToken = (user) => {
   );
 };
 
+/**
+ * =========================
+ * CLEAN USER RESPONSE
+ * =========================
+ */
 const cleanUser = (user) => {
-  const userResponse = user.toJSON();
-  delete userResponse.password;
-  delete userResponse.resetPasswordToken;
-  delete userResponse.resetPasswordExpires;
-  return userResponse;
+  const data = user.toJSON();
+  delete data.password;
+  delete data.resetPasswordToken;
+  delete data.resetPasswordExpires;
+  return data;
 };
 
-// Register new user
+/**
+ * =========================
+ * REGISTER USER
+ * =========================
+ */
 const register = async (req, res) => {
   try {
-    const { username, email, password, phone, companyName, address, role } =
-      req.body;
+    const {
+      username,
+      email,
+      password,
+      phone,
+      companyName,
+      address,
+      role,
+    } = req.body;
+
+    if (!username || !email || !password || !phone) {
+      return res.status(400).json({
+        message: "Username, email, password, and phone are required",
+      });
+    }
 
     const existingUser = await User.findOne({
       where: {
@@ -55,29 +82,40 @@ const register = async (req, res) => {
       companyName: companyName || null,
       address: address || null,
       role: role || "customer",
+      isAvailable: true,
     });
 
     const token = generateToken(user);
 
-    res.status(201).json({
+    return res.status(201).json({
       message: "User registered successfully",
       user: cleanUser(user),
       token,
+      redirectTo: getRedirect(user.role),
     });
   } catch (error) {
     console.error("Register error:", error);
-
-    res.status(500).json({
+    return res.status(500).json({
       message: "Error registering user",
       error: error.message,
     });
   }
 };
 
-// Login user
+/**
+ * =========================
+ * LOGIN USER
+ * =========================
+ */
 const login = async (req, res) => {
   try {
     const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({
+        message: "Email and password are required",
+      });
+    }
 
     const user = await User.findOne({ where: { email } });
 
@@ -97,22 +135,44 @@ const login = async (req, res) => {
 
     const token = generateToken(user);
 
-    res.json({
+    return res.json({
       message: "Login successful",
       user: cleanUser(user),
       token,
+      redirectTo: getRedirect(user.role),
     });
   } catch (error) {
     console.error("Login error:", error);
-
-    res.status(500).json({
+    return res.status(500).json({
       message: "Error logging in",
       error: error.message,
     });
   }
 };
 
-// Get current user profile
+/**
+ * =========================
+ * ROLE ROUTING HELPER
+ * =========================
+ */
+const getRedirect = (role) => {
+  switch (role) {
+    case "admin":
+      return "/admin/dashboard";
+    case "ceo":
+      return "/ceo/dashboard";
+    case "driver":
+      return "/driver/dashboard";
+    default:
+      return "/customer/dashboard";
+  }
+};
+
+/**
+ * =========================
+ * GET PROFILE
+ * =========================
+ */
 const getProfile = async (req, res) => {
   try {
     const user = await User.findByPk(req.userId, {
@@ -127,18 +187,21 @@ const getProfile = async (req, res) => {
       });
     }
 
-    res.json({ user });
+    return res.json({ user });
   } catch (error) {
     console.error("Get profile error:", error);
-
-    res.status(500).json({
+    return res.status(500).json({
       message: "Error fetching profile",
       error: error.message,
     });
   }
 };
 
-// Forgot password
+/**
+ * =========================
+ * FORGOT PASSWORD
+ * =========================
+ */
 const forgotPassword = async (req, res) => {
   try {
     const email = String(req.body.email || "").trim().toLowerCase();
@@ -149,15 +212,13 @@ const forgotPassword = async (req, res) => {
       });
     }
 
-    const user = await User.findOne({
-      where: { email },
-    });
+    const user = await User.findOne({ where: { email } });
 
-    // Security: don't reveal whether account exists
+    // Always return success message (security best practice)
     if (!user) {
       return res.json({
         message:
-          "If an account exists with that email, a password reset link has been sent.",
+          "If an account exists, a reset link has been sent to your email",
       });
     }
 
@@ -168,10 +229,8 @@ const forgotPassword = async (req, res) => {
       .update(rawToken)
       .digest("hex");
 
-    const resetExpires = new Date(Date.now() + 1000 * 60 * 30);
-
     user.resetPasswordToken = hashedToken;
-    user.resetPasswordExpires = resetExpires;
+    user.resetPasswordExpires = new Date(Date.now() + 1000 * 60 * 30);
 
     await user.save();
 
@@ -182,85 +241,42 @@ const forgotPassword = async (req, res) => {
 
     await sendEmail({
       to: user.email,
-      subject: "Naglink Password Reset",
+      subject: "Password Reset",
       html: `
-        <div style="font-family: Arial, sans-serif; max-width:600px; margin:auto;">
-          <h2 style="color:#0f172a;">
-            Password Reset Request
-          </h2>
-
-          <p>Hello ${user.username},</p>
-
-          <p>
-            We received a request to reset your Naglink account password.
-          </p>
-
-          <p>
-            Click the button below to reset your password:
-          </p>
-
-          <p style="margin:30px 0;">
-            <a
-              href="${resetLink}"
-              style="
-                background:#1d4ed8;
-                color:white;
-                padding:12px 20px;
-                text-decoration:none;
-                border-radius:6px;
-                font-weight:bold;
-              "
-            >
-              Reset Password
-            </a>
-          </p>
-
-          <p>
-            This link will expire in 30 minutes.
-          </p>
-
-          <p>
-            If you did not request a password reset,
-            please ignore this email.
-          </p>
-
-          <hr />
-
-          <p style="font-size:12px;color:#64748b;">
-            Naglink Investments
-          </p>
-        </div>
+        <h3>Password Reset Request</h3>
+        <p>Hello ${user.username},</p>
+        <p>Click below to reset your password:</p>
+        <a href="${resetLink}">Reset Password</a>
+        <p>This link expires in 30 minutes.</p>
       `,
     });
 
-    res.json({
+    return res.json({
       message:
-        "If an account exists with that email, a password reset link has been sent.",
+        "If an account exists, a reset link has been sent to your email",
     });
   } catch (error) {
     console.error("Forgot password error:", error);
-
-    res.status(500).json({
-      message: "Error processing forgot password request",
+    return res.status(500).json({
+      message: "Error processing request",
       error: error.message,
     });
   }
 };
-// Reset password
+
+/**
+ * =========================
+ * RESET PASSWORD
+ * =========================
+ */
 const resetPassword = async (req, res) => {
   try {
     const { token } = req.params;
     const { password } = req.body;
 
-    if (!token) {
+    if (!token || !password) {
       return res.status(400).json({
-        message: "Reset token is required",
-      });
-    }
-
-    if (!password || password.length < 6) {
-      return res.status(400).json({
-        message: "Password must be at least 6 characters",
+        message: "Token and password are required",
       });
     }
 
@@ -272,15 +288,13 @@ const resetPassword = async (req, res) => {
     const user = await User.findOne({
       where: {
         resetPasswordToken: hashedToken,
-        resetPasswordExpires: {
-          [Op.gt]: new Date(),
-        },
+        resetPasswordExpires: { [Op.gt]: new Date() },
       },
     });
 
     if (!user) {
       return res.status(400).json({
-        message: "Reset link is invalid or has expired",
+        message: "Invalid or expired reset token",
       });
     }
 
@@ -292,13 +306,12 @@ const resetPassword = async (req, res) => {
       resetPasswordExpires: null,
     });
 
-    res.json({
-      message: "Password reset successfully. You can now login.",
+    return res.json({
+      message: "Password reset successful",
     });
   } catch (error) {
     console.error("Reset password error:", error);
-
-    res.status(500).json({
+    return res.status(500).json({
       message: "Error resetting password",
       error: error.message,
     });

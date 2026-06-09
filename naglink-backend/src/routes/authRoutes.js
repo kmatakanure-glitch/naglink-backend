@@ -14,6 +14,9 @@ const router = express.Router();
 
 // Public routes
 router.post("/register", register);
+router.get("/login", (req, res) => {
+  res.json({ message: "Login route exists" });
+});
 router.post("/login", login);
 router.post("/forgot-password", forgotPassword);
 router.put("/reset-password/:token", resetPassword);
